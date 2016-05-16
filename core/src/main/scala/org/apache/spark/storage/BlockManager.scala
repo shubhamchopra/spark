@@ -1172,7 +1172,8 @@ private[spark] class BlockManager(
             val filteredPeers = getPeers(true).filter{p =>
               !(updatedFailedPeers.contains(p) || peersReplicatedTo.contains(p))
             }
-            val updatedPeers = blockReplicationPrioritizer.prioritize(filteredPeers, blockId)
+            val updatedPeers =
+              blockReplicationPrioritizer.prioritize(filteredPeers, peersReplicatedTo, blockId)
             (numFailures + 1, updatedPeers, peersReplicatedTo, updatedFailedPeers)
         }
 
@@ -1182,7 +1183,7 @@ private[spark] class BlockManager(
 
     val startTime = System.currentTimeMillis
     val peersReplicatedTo = replicateBlock(0,
-      blockReplicationPrioritizer.prioritize(getPeers(false), blockId),
+      blockReplicationPrioritizer.prioritize(getPeers(false), Set.empty, blockId),
       Set.empty,
       Set.empty)
     logDebug(s"Replicating $blockId of ${data.size} bytes to " +
