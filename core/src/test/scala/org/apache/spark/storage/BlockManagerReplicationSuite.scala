@@ -21,13 +21,12 @@ import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.duration._
 import scala.language.implicitConversions
 import scala.language.postfixOps
-
 import org.mockito.Mockito.{mock, when}
 import org.scalatest.{BeforeAndAfter, Matchers}
 import org.scalatest.concurrent.Eventually._
-
 import org.apache.spark._
 import org.apache.spark.broadcast.BroadcastManager
+import org.apache.spark.internal.Logging
 import org.apache.spark.memory.UnifiedMemoryManager
 import org.apache.spark.network.BlockTransferService
 import org.apache.spark.network.netty.NettyBlockTransferService
@@ -37,24 +36,26 @@ import org.apache.spark.serializer.{KryoSerializer, SerializerManager}
 import org.apache.spark.shuffle.sort.SortShuffleManager
 import org.apache.spark.storage.StorageLevel._
 
-/** Testsuite that tests block replication in BlockManager */
-class BlockManagerReplicationSuite extends SparkFunSuite with Matchers with BeforeAndAfter {
+import scala.util.Random
 
-  private val conf = new SparkConf(false).set("spark.app.id", "test")
+/** Testsuite that tests block replication in BlockManager */
+trait BlockManagerReplicationBehavior extends SparkFunSuite with Matchers with BeforeAndAfter {
+
+  val conf: SparkConf
+
   private var rpcEnv: RpcEnv = null
   private var master: BlockManagerMaster = null
-  private val securityMgr = new SecurityManager(conf)
-  private val bcastManager = new BroadcastManager(true, conf, securityMgr)
-  private val mapOutputTracker = new MapOutputTrackerMaster(conf, bcastManager, true)
-  private val shuffleManager = new SortShuffleManager(conf)
+  private lazy val securityMgr = new SecurityManager(conf)
+  private lazy val bcastManager = new BroadcastManager(true, conf, securityMgr)
+  private lazy val mapOutputTracker = new MapOutputTrackerMaster(conf, bcastManager, true)
+  private lazy val shuffleManager = new SortShuffleManager(conf)
 
   // List of block manager created during an unit test, so that all of the them can be stopped
   // after the unit test.
   private val allStores = new ArrayBuffer[BlockManager]
 
   // Reuse a serializer across tests to avoid creating a new thread-local buffer on each test
-  conf.set("spark.kryoserializer.buffer", "1m")
-  private val serializer = new KryoSerializer(conf)
+  private lazy val serializer = new KryoSerializer(conf)
 
   // Implicitly convert strings to BlockIds for test clarity.
   private implicit def StringToBlockId(value: String): BlockId = new TestBlockId(value)
@@ -440,4 +441,36 @@ class BlockManagerReplicationSuite extends SparkFunSuite with Matchers with Befo
       master.removeBlock(blockId)
     }
   }
+}
+
+class DummyTopologyMapper extends TopologyMapper with Logging {
+  // number of racks to test with
+  val numRacks = 3
+
+  /**
+   * Gets the topology information given the host name
+   *
+   * @param hostname Hostname
+   * @return random topology
+   */
+  override def getTopologyForHost(hostname: String): String = {
+    s"/Rack-${Random.nextInt(numRacks)}"
+  }
+}
+
+class BlockManagerReplicationSuite extends BlockManagerReplicationBehavior {
+  override val conf = new SparkConf(false).set("spark.app.id", "test")
+  conf.set("spark.kryoserializer.buffer", "1m")
+}
+
+class BlockManagerBasicStrategyReplicationSuite extends BlockManagerReplicationBehavior {
+  override val conf: SparkConf = new SparkConf(false).set("spark.app.id", "test")
+  conf.set("spark.kryoserializer.buffer", "1m")
+  conf.set(
+    "spark.replication.topologyawareness.prioritizer",
+    "org.apache.spark.storage.BasicBlockReplicationPrioritization")
+  conf.set(
+    "spark.replication.topologyawareness.topologyMapper",
+    "org.apache.spark.storage.DummyTopologyMapper"
+  )
 }
